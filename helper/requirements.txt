@@ -1,0 +1,12 @@
+# Runtime used by the headless StartLive backend. PySide6 is intentionally absent.
+aiortc==1.15.0
+aioice==0.10.2
+av==17.1.0
+Brotli==1.2.1
+certifi==2026.10.23
+cryptography==49.0.0
+keyring==25.6.0
+obsws-python==1.8.1
+pillow==12.2.0
+protobuf==6.33.6
+requests[socks]==2.32.5
