@@ -12,11 +12,11 @@ bilive 是原生 OBS 插件，用于 B 站扫码登录、直播间管理、自�
 | Windows | 将 `bilive` 文件夹放入 `%ProgramData%\obs-studio\plugins\` |
 | Linux | 将 `bilive` 文件夹放入 `${XDG_DATA_HOME:-$HOME/.local/share}/obs-studio/plugins/` |
 
-启动 OBS，打开「停靠窗口 → bilive」，扫码登录后即可管理房间并将推流设置导入 OBS。如遇人脸验证，用手机完成后再点开播。Linux 保存账号需要桌面 Secret Service 和 `secret-tool`。
+启动 OBS，打开「停靠窗口 → bilive」并扫码登录。点分区旁的「修改」可选择大类和子分区。开播成功后，推流设置会自动导入 OBS。如遇人脸验证，按手机提示完成后再点开播。Linux 保存账号需要桌面 Secret Service 和 `secret-tool`。
 
 ## 构建
 
-面向 OBS 33.0.1。构建需要 CMake、Ninja 和 C++20，打包脚本使用 Python 3.13。Windows 在 VS x64 开发终端运行。Ubuntu 26.04 需要 `qt6-base-dev`、`qt6-base-dev-tools`、`ninja-build` 和 `libobs-dev`。
+面向 OBS 33.0.1。构建需要 CMake、Ninja 和 C++20。Python 3.13 仅用于运行打包脚本。Windows 在 VS x64 开发终端运行。Ubuntu 26.04 需要 `qt6-base-dev`、`qt6-base-dev-tools`、`ninja-build` 和 `libobs-dev`。
 
 ```sh
 python3 tools/platform-build.py .sdk
