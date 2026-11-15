@@ -16,6 +16,7 @@ public:
     explicit Network(QObject *parent = nullptr);
     // The caller's context must live in this object's Qt thread. Destroying it
     // disconnects the completion, while Network still releases the reply.
+    bool setProxy(int mode, const QUrl &url = {});
     void send(const Request &, QObject *context, Completion completion);
 
 private:

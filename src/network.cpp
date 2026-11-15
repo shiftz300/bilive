@@ -2,13 +2,44 @@
 #include "bilive/network.hpp"
 
 #include <QNetworkReply>
+#include <QNetworkProxyFactory>
 #include <QNetworkRequest>
 
 namespace bilive {
+namespace {
+class SystemProxy final : public QNetworkProxyFactory {
+    QList<QNetworkProxy> queryProxy(const QNetworkProxyQuery &query) override
+    {
+        return systemProxyForQuery(query);
+    }
+};
+}
+
 
 Network::Network(QObject *parent) : QObject(parent)
 {
     manager_.setAutoDeleteReplies(true);
+    setProxy(0);
+}
+
+bool Network::setProxy(int mode, const QUrl &url)
+{
+    if (mode == 0) {
+        manager_.setProxy(QNetworkProxy(QNetworkProxy::NoProxy));
+    } else if (mode == 1) {
+        manager_.setProxyFactory(new SystemProxy);
+    } else if (mode == 2) {
+        const auto scheme = url.scheme();
+        const bool socks = scheme == QStringLiteral("socks5") || scheme == QStringLiteral("socks5h");
+        if ((!socks && scheme != QStringLiteral("http")) || url.host().isEmpty() ||
+            url.port(-1) <= 0 || url.port(-1) > 65535 || !url.userInfo().isEmpty())
+            return false;
+        manager_.setProxy(QNetworkProxy(socks ? QNetworkProxy::Socks5Proxy : QNetworkProxy::HttpProxy,
+                                       url.host(), quint16(url.port())));
+    } else {
+        return false;
+    }
+    return true;
 }
 
 void Network::send(const Request &request, QObject *context, Completion completion)
@@ -28,7 +59,7 @@ void Network::send(const Request &request, QObject *context, Completion completi
         Response response;
         response.status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
         if (reply->error() != QNetworkReply::NoError)
-            response.networkError = reply->errorString();
+            response.networkError = tr("网络请求失败（%1）").arg(int(reply->error()));
         response.body = reply->readAll();
         for (const auto &header : reply->rawHeaderPairs()) {
             if (header.first.compare("Set-Cookie", Qt::CaseInsensitive) == 0)

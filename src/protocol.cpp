@@ -5,6 +5,7 @@
 #include <QCryptographicHash>
 #include <QJsonDocument>
 #include <QNetworkCookie>
+#include <QUuid>
 
 namespace bilive {
 namespace {
@@ -176,7 +177,8 @@ Request Protocol::make(Method method, const QString &host, const QString &path,
     if (!query.isEmpty())
         url += '?' + encode(query);
 
-    Headers requestHeaders = host == passport ? identity_.webHeaders : identity_.appHeaders;
+    Headers requestHeaders = (host == passport || path.startsWith(u"/x/gaia-vgate/"))
+                                 ? identity_.webHeaders : identity_.appHeaders;
     requestHeaders.remove("accept-encoding");
     requestHeaders.remove("cookie");
     requestHeaders.remove("content-length");
@@ -271,6 +273,88 @@ Request Protocol::updateAnnouncement(const Credentials &credentials, const QStri
     form.insert(QStringLiteral("content"), text);
     form.insert(QStringLiteral("type"), QStringLiteral("1"));
     return make(Method::Post, live, QStringLiteral("/xlive/app-blink/v1/room/AnnounceCommit"),
+                {}, form, &credentials);
+}
+
+Request Protocol::uploadCover(const Credentials &credentials, const QByteArray &png) const
+{
+    auto req = make(Method::Post, QStringLiteral("api.bilibili.com"),
+                    QStringLiteral("/x/upload/web/image"),
+                    {{QStringLiteral("csrf"), credentials.csrf()}}, {}, &credentials);
+    const auto boundary = QByteArray("bilive-") + QUuid::createUuid().toByteArray(QUuid::WithoutBraces);
+    req.headers.insert("content-type", "multipart/form-data; boundary=" + boundary);
+    req.body = "--" + boundary + "\r\nContent-Disposition: form-data; name=\"bucket\"\r\n\r\nlive\r\n";
+    req.body += "--" + boundary + "\r\nContent-Disposition: form-data; name=\"dir\"\r\n\r\nnew_room_cover\r\n";
+    req.body += "--" + boundary + "\r\nContent-Disposition: form-data; name=\"file\"; filename=\"blob.png\"\r\n"
+                "Content-Type: image/png\r\n\r\n";
+    req.body += png + "\r\n--" + boundary + "--\r\n";
+    return req;
+}
+
+Request Protocol::updateCover(const Credentials &credentials, const QUrl &url) const
+{
+    Form form{{QStringLiteral("platform"), QStringLiteral("pc_link")},
+              {QStringLiteral("mobi_app"), QStringLiteral("pc_link")},
+              {QStringLiteral("build"), QStringLiteral("1")},
+              {QStringLiteral("cover"), QString::fromUtf8(url.toEncoded())},
+              {QStringLiteral("coverVertical"), {}},
+              {QStringLiteral("liveDirectionType"), QStringLiteral("1")},
+              {QStringLiteral("visit_id"), {}}};
+    addCsrf(form, credentials);
+    return make(Method::Post, live, QStringLiteral("/xlive/app-blink/v1/preLive/UpdatePreLiveInfo"),
+                {}, form, &credentials);
+}
+
+Request Protocol::timeShift(const Credentials &credentials, const QString &roomId, qint64 now) const
+{
+    Form query{{QStringLiteral("room_id"), roomId}};
+    addCsrf(query, credentials);
+    return make(Method::Get, live, QStringLiteral("/xlive/app-blink/v1/upStreamConfig/GetAnchorSelfStreamTimeShift"),
+                sign(query, now), {}, &credentials);
+}
+
+Request Protocol::setTimeShift(const Credentials &credentials, const QString &roomId, int seconds, qint64 now) const
+{
+    Form form{{QStringLiteral("room_id"), roomId}, {QStringLiteral("time_shift"), QString::number(seconds)}};
+    addCsrf(form, credentials);
+    return make(Method::Post, live, QStringLiteral("/xlive/app-blink/v1/upStreamConfig/SetAnchorSelfStreamTimeShift"),
+                {}, sign(form, now), &credentials);
+}
+
+Request Protocol::faceRegister(const Credentials &credentials, const QString &voucher) const
+{
+    return make(Method::Post, QStringLiteral("api.bilibili.com"), QStringLiteral("/x/gaia-vgate/v2/register"), {},
+                {{QStringLiteral("v_voucher"), voucher}, {QStringLiteral("dm_track"), QStringLiteral("[]")},
+                 {QStringLiteral("csrf"), credentials.csrf()}}, &credentials);
+}
+
+Request Protocol::faceStatus(const Credentials &credentials, const QString &roomId,
+                             const QString &token, const QString &track) const
+{
+    if (!token.isEmpty()) {
+        return make(Method::Post, QStringLiteral("api.bilibili.com"),
+                    QStringLiteral("/x/gaia-vgate/v2/validatePreCheck"), {},
+                    {{QStringLiteral("token"), token}, {QStringLiteral("dm_track"), track},
+                     {QStringLiteral("csrf"), credentials.csrf()}}, &credentials);
+    }
+    Form form{{QStringLiteral("room_id"), roomId}, {QStringLiteral("face_auth_code"), QStringLiteral("60024")},
+              {QStringLiteral("visit_id"), {}}};
+    addCsrf(form, credentials);
+    return make(Method::Post, live, QStringLiteral("/xlive/app-blink/v1/preLive/IsUserIdentifiedByFaceAuth"),
+                {}, form, &credentials);
+}
+
+Request Protocol::faceReport(const Credentials &credentials, const QString &roomId, const QString &area,
+                             int code, const QString &message, qint64 now) const
+{
+    Form form = sign({}, now);
+    addCsrf(form, credentials);
+    form.insert(QStringLiteral("area_v2_id"), area);
+    form.insert(QStringLiteral("face_auth_code"), QString::number(code));
+    form.insert(QStringLiteral("face_auth_message"), message);
+    form.insert(QStringLiteral("room_id"), roomId);
+    form.insert(QStringLiteral("scene"), QStringLiteral("startLive"));
+    return make(Method::Post, live, QStringLiteral("/xlive/app-blink/v1/preLive/ReportFaceRecognition"),
                 {}, form, &credentials);
 }
 

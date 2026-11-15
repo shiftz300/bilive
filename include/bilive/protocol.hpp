@@ -126,6 +126,15 @@ public:
                                      const QString &areaId, qint64 now) const;
     [[nodiscard]] Request updateAnnouncement(const Credentials &, const QString &text,
                                              qint64 now) const;
+    [[nodiscard]] Request uploadCover(const Credentials &, const QByteArray &png) const;
+    [[nodiscard]] Request updateCover(const Credentials &, const QUrl &) const;
+    [[nodiscard]] Request timeShift(const Credentials &, const QString &roomId, qint64 now) const;
+    [[nodiscard]] Request setTimeShift(const Credentials &, const QString &roomId, int seconds, qint64 now) const;
+    [[nodiscard]] Request faceRegister(const Credentials &, const QString &voucher) const;
+    [[nodiscard]] Request faceStatus(const Credentials &, const QString &roomId,
+                                     const QString &token, const QString &track) const;
+    [[nodiscard]] Request faceReport(const Credentials &, const QString &roomId, const QString &area,
+                                     int code, const QString &message, qint64 now) const;
     [[nodiscard]] Request start(const Credentials &, const QString &roomId,
                                 const QString &areaId, qint64 now) const;
     [[nodiscard]] Request stop(const Credentials &, const QString &roomId, qint64 now) const;
