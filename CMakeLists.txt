@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.24)
 if(CMAKE_HOST_APPLE AND NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET)
     set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Minimum macOS version")
 endif()
-project(bilive VERSION 0.2.1 LANGUAGES CXX)
+project(bilive VERSION 0.3.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -28,20 +28,13 @@ endif()
 option(BILIVE_OBS_PLUGIN "Build the native Qt OBS plugin" OFF)
 if(BILIVE_OBS_PLUGIN)
     find_package(Qt6 6.6 REQUIRED COMPONENTS Widgets)
-    add_library(bilive MODULE src/plugin.cpp src/accounts.cpp src/automation.cpp
-        src/cover.cpp src/helper.cpp src/pk.cpp third_party/qrcodegen/qrcodegen.cpp
-        third_party/startlive-capture/plugin.cpp third_party/startlive-capture/media_transport.cpp
-        third_party/startlive-capture/shared_video.cpp)
-    find_package(Threads REQUIRED)
-    target_link_libraries(bilive PRIVATE Threads::Threads)
-    target_compile_definitions(bilive PRIVATE STARTLIVE_PK_MAX_FPS=30)
+    add_library(bilive MODULE src/plugin.cpp src/accounts.cpp src/cover.cpp
+        third_party/qrcodegen/qrcodegen.cpp)
     if(APPLE)
         target_link_libraries(bilive PRIVATE "-framework Security")
     elseif(WIN32)
         target_link_libraries(bilive PRIVATE advapi32)
         target_compile_definitions(bilive PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
-    elseif(UNIX)
-        target_link_libraries(bilive PRIVATE rt)
     endif()
     target_include_directories(bilive PRIVATE third_party/qrcodegen)
     target_link_libraries(bilive PRIVATE bilive-core Qt6::Widgets)
@@ -117,28 +110,4 @@ if(BILIVE_OBS_PLUGIN)
     endif()
 
     install(FILES resources/livehime.json LICENSE DESTINATION "${data_dest}")
-    install(DIRECTORY helper/ DESTINATION "${data_dest}/helper"
-        PATTERN "__pycache__" EXCLUDE PATTERN "*.pyc" EXCLUDE)
-    set(BILIVE_HELPER_RUNTIME "" CACHE PATH "Bundled CPython 3.13 runtime")
-    set(BILIVE_HELPER_SITE "" CACHE PATH "Installed platform helper dependencies")
-    if(BILIVE_HELPER_RUNTIME AND BILIVE_HELPER_SITE)
-        if(BUILD_TESTING)
-            if(WIN32)
-                set(helper_python "${BILIVE_HELPER_RUNTIME}/python.exe")
-            else()
-                set(helper_python "${BILIVE_HELPER_RUNTIME}/bin/python3.13")
-            endif()
-            add_test(NAME bilive-helper COMMAND "${helper_python}" -B
-                "${CMAKE_CURRENT_SOURCE_DIR}/tests/helper_test.py"
-                "${CMAKE_CURRENT_SOURCE_DIR}/helper/bilive_helper.py"
-                "${CMAKE_CURRENT_SOURCE_DIR}/resources/livehime.json")
-            set_tests_properties(bilive-helper PROPERTIES
-                ENVIRONMENT "PYTHONPATH=${BILIVE_HELPER_SITE}"
-                TIMEOUT 50)
-        endif()
-        install(DIRECTORY "${BILIVE_HELPER_RUNTIME}/" DESTINATION "${data_dest}/helper/runtime"
-            USE_SOURCE_PERMISSIONS PATTERN "__pycache__" EXCLUDE)
-        install(DIRECTORY "${BILIVE_HELPER_SITE}/" DESTINATION "${data_dest}/helper/site"
-            USE_SOURCE_PERMISSIONS PATTERN "__pycache__" EXCLUDE)
-    endif()
 endif()

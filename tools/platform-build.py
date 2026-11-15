@@ -14,7 +14,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 OBS = "33.0.1"
 QT = "2026-10-23"
-OUT = "0.2.1"
+OUT = "0.3.0"
 OBS_URL = f"https://github.com/obsproject/obs-studio/releases/download/{OBS}/"
 QT_URL = f"https://github.com/obsproject/obs-deps/releases/download/{QT}/"
 
@@ -127,13 +127,10 @@ def build(work, obs_app):
     unpack(source, work)
     unpack(simde, work)
     platform_id, sdk = platform_sdk(work, obs_app)
-    helper = work / "helper"
-    run(os.sys.executable, str(ROOT / "tools/helper-runtime.py"), str(helper))
     build_dir = work / "build"
     run("cmake", "-S", str(ROOT), "-B", str(build_dir), "-G", "Ninja", "-DCMAKE_BUILD_TYPE=Release",
         "-DBILIVE_OBS_PLUGIN=ON", f"-DBILIVE_OBS_SOURCE={work / ('obs-studio-' + OBS)}",
-        f"-DBILIVE_SIMDE_INCLUDE={work / 'simde-0.8.2'}", f"-DBILIVE_HELPER_RUNTIME={helper / 'runtime'}",
-        f"-DBILIVE_HELPER_SITE={helper / 'site'}", *sdk)
+        f"-DBILIVE_SIMDE_INCLUDE={work / 'simde-0.8.2'}", *sdk)
     run("cmake", "--build", str(build_dir))
     run("ctest", "--test-dir", str(build_dir), "--output-on-failure")
     staged = work / "package"

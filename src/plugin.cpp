@@ -1,9 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "bilive/network.hpp"
 #include "bilive/accounts.hpp"
-#include "bilive/automation.hpp"
 #include "bilive/cover.hpp"
-#include "bilive/pk.hpp"
 #include "qrcodegen.hpp"
 
 #include <obs-frontend-api.h>
@@ -22,13 +20,9 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFontDialog>
-#include <QJsonDocument>
-#include <QMessageBox>
 #include <QPlainTextEdit>
-#include <QSaveFile>
 #include <QSettings>
 #include <QSignalBlocker>
-#include <QSpinBox>
 #include <QFile>
 #include <QFormLayout>
 #include <QHBoxLayout>
@@ -90,22 +84,9 @@ QByteArray persistentDevice(QSettings &settings)
 
 class Dock final : public QWidget {
 public:
-    Dock(Identity identity, const QString &wirePath, const QString &settingsPath)
+    Dock(Identity identity, const QString &settingsPath)
         : settings_(settingsPath, QSettings::IniFormat),
-          deviceId_(persistentDevice(settings_)), protocol_(std::move(identity), deviceId_),
-          accounts_(settings_),
-          helper_(QFileInfo(wirePath).absolutePath()), wirePath_(wirePath),
-          automation_([this](bool start) {
-              if (busy_ || !room_ || !credentials_.valid() || (start ? room_->live : !room_->live))
-                  return false;
-              if (start && (facePending_ || area_->currentData().toString().isEmpty() || obs_frontend_streaming_active()))
-                  return false;
-              if (start)
-                  startRoom();
-              else
-                  stopRoom();
-              return true;
-          })
+          protocol_(std::move(identity), persistentDevice(settings_)), accounts_(settings_)
     {
         auto *layout = new QVBoxLayout(this);
         auto *loginRow = new QHBoxLayout;
@@ -173,8 +154,6 @@ public:
         };
         cover_ = addFeature(tr("封面"), [this] { editCover(); });
         delay_ = addFeature(tr("延迟"), [this] { editDelay(); });
-        pkButton_ = addFeature(tr("PK / 连线"), [this] { openPk(); });
-        addFeature(tr("配置转换"), [this] { convertConfig(); });
         addFeature(tr("设置"), [this] { preferences(); });
         addFeature(tr("日志"), [this] { openLog(); });
         layout->addLayout(features);
@@ -221,10 +200,6 @@ public:
         faceTimer_.setSingleShot(true);
         faceTimer_.setInterval(1500);
         connect(&faceTimer_, &QTimer::timeout, this, [this] { pollFace(); });
-        helper_.onEvent([this](const QString &event, const QJsonArray &args, const QJsonObject &fields) {
-            if (pk_)
-                pk_->receive(event, args, fields);
-        });
         network_.setProxy(settings_.value(QStringLiteral("network/proxyMode"), 0).toInt(),
                           QUrl(settings_.value(QStringLiteral("network/proxy")).toString()));
         const auto savedFont = settings_.value(QStringLiteral("appearance/font")).toString();
@@ -236,21 +211,11 @@ public:
         const auto uid = settings_.value(QStringLiteral("accounts/current")).toString();
         if (!uid.isEmpty())
             QTimer::singleShot(0, this, [this, uid] { useAccount(uid); });
-        if (settings_.value(QStringLiteral("automation/enabled"), false).toBool())
-            configureAutomation();
-    }
-
-    ~Dock() override
-    {
-        helper_.onEvent({});
-        delete pk_;
     }
 
     void outputStopped()
     {
         startedOutput_ = false;
-        if (pk_)
-            pk_->retire();
     }
 
 private:
@@ -298,7 +263,7 @@ private:
         login_->setEnabled(!busy_);
         refresh_->setEnabled(signedIn && !busy_);
         account_->setEnabled(!busy_);
-        for (auto *item : QList<QWidget *>{title_, area_, saveTitle_, saveArea_, start_, announcement_, cover_, delay_, pkButton_})
+        for (auto *item : QList<QWidget *>{title_, area_, saveTitle_, saveArea_, start_, announcement_, cover_, delay_})
             item->setEnabled(loaded && !busy_);
         start_->setText(loaded && room_->live ? tr("重新获取推流地址") : tr("开播"));
         stop_->setEnabled(loaded && room_->live && !busy_);
@@ -342,8 +307,6 @@ private:
         facePending_ = false;
         faceToken_.clear();
         faceTrack_.clear();
-        if (pk_)
-            pk_->retire();
         qr_->clear();
         qr_->hide();
         credentials_ = {};
@@ -616,22 +579,6 @@ private:
         });
     }
 
-    void configureAutomation()
-    {
-        const bool enabled = settings_.value(QStringLiteral("automation/enabled"), false).toBool();
-        auto token = settings_.value(QStringLiteral("automation/token")).toByteArray();
-        if (enabled && token.isEmpty()) {
-            token = QUuid::createUuid().toByteArray(QUuid::WithoutBraces);
-            settings_.setValue(QStringLiteral("automation/token"), token);
-            settings_.sync();
-            QFile::setPermissions(settings_.fileName(), QFileDevice::ReadOwner | QFileDevice::WriteOwner);
-        }
-        const auto port = quint16(settings_.value(QStringLiteral("automation/port"), 8080).toUInt());
-        if (!automation_.configure(enabled ? port : 0,
-                                   settings_.value(QStringLiteral("automation/lan"), false).toBool(), token))
-            showStatus(tr("自动化服务未启动：%1").arg(automation_.errorString()));
-    }
-
     void preferences()
     {
         QDialog dialog(this);
@@ -644,28 +591,8 @@ private:
         mode->setCurrentIndex(qBound(0, settings_.value(QStringLiteral("network/proxyMode"), 0).toInt(), 2));
         auto *proxy = new QLineEdit(settings_.value(QStringLiteral("network/proxy")).toString(), &dialog);
         proxy->setPlaceholderText(QStringLiteral("socks5://127.0.0.1:7890"));
-        auto *enabled = new QCheckBox(&dialog);
-        enabled->setChecked(settings_.value(QStringLiteral("automation/enabled"), false).toBool());
-        auto *lan = new QCheckBox(&dialog);
-        lan->setChecked(settings_.value(QStringLiteral("automation/lan"), false).toBool());
-        auto *port = new QSpinBox(&dialog);
-        port->setRange(1, 65535);
-        port->setValue(settings_.value(QStringLiteral("automation/port"), 8080).toInt());
-        auto *token = new QLineEdit(settings_.value(QStringLiteral("automation/token")).toString(), &dialog);
-        token->setReadOnly(true);
-        token->setEchoMode(QLineEdit::Password);
-        auto *copy = new QPushButton(tr("复制令牌"), &dialog);
-        connect(copy, &QPushButton::clicked, &dialog, [token] {
-            if (!token->text().isEmpty())
-                QApplication::clipboard()->setText(token->text());
-        });
         form->addRow(tr("网络"), mode);
         form->addRow(tr("代理地址"), proxy);
-        form->addRow(tr("开启 HTTP 自动化"), enabled);
-        form->addRow(tr("允许局域网连接"), lan);
-        form->addRow(tr("端口"), port);
-        form->addRow(tr("令牌"), token);
-        form->addRow(copy);
         QFont selectedFont = font();
         bool fontChosen = false;
         auto *fontButton = new QPushButton(tr("选择字体…"), &dialog);
@@ -690,97 +617,10 @@ private:
         }
         settings_.setValue(QStringLiteral("network/proxyMode"), mode->currentIndex());
         settings_.setValue(QStringLiteral("network/proxy"), proxy->text());
-        settings_.setValue(QStringLiteral("automation/enabled"), enabled->isChecked());
-        settings_.setValue(QStringLiteral("automation/lan"), lan->isChecked());
-        settings_.setValue(QStringLiteral("automation/port"), port->value());
         if (fontChosen) {
             settings_.setValue(QStringLiteral("appearance/font"), selectedFont.toString());
             setFont(selectedFont);
         }
-        configureAutomation();
-    }
-
-    void openPk()
-    {
-        if (!room_)
-            return;
-        if (!pk_)
-            pk_ = new PkDialog(helper_, settings_, this);
-        QJsonObject cookies;
-        for (auto it = credentials_.cookies.begin(); it != credentials_.cookies.end(); ++it)
-            cookies.insert(QString::fromLatin1(it.key()), QString::fromLatin1(it.value()));
-        pk_->setContext({{QStringLiteral("identity"), wirePath_}, {QStringLiteral("room"), room_->id},
-                         {QStringLiteral("cookies"), cookies},
-                         {QStringLiteral("device"), QString::fromLatin1(deviceId_)},
-                         {QStringLiteral("proxy_mode"), settings_.value(QStringLiteral("network/proxyMode"), 0).toInt()},
-                         {QStringLiteral("proxy"), settings_.value(QStringLiteral("network/proxy")).toString()}});
-        pk_->show();
-        pk_->raise();
-    }
-
-    void convertConfig()
-    {
-        bool ok = false;
-        const QStringList options{tr("选择 JSON 文件"), tr("搜索指定目录"), tr("自动查找")};
-        const auto option = QInputDialog::getItem(this, tr("场景集合转换"), tr("直播姬配置来源"),
-                                                 options, 0, false, &ok);
-        if (!ok)
-            return;
-        if (option == options[0]) {
-            const auto path = QFileDialog::getOpenFileName(this, tr("选择直播姬场景配置"), {}, tr("JSON (*.json)"));
-            previewConversion(path);
-            return;
-        }
-        const auto root = option == options[1] ? QFileDialog::getExistingDirectory(this, tr("选择配置目录"))
-                                               : QString{};
-        if (option == options[1] && root.isEmpty())
-            return;
-        helper_.call(QStringLiteral("discover"), {{QStringLiteral("path"), root}}, [this](auto reply) {
-            if (const auto *error = std::get_if<Error>(&reply))
-                return showError(*error);
-            QStringList found;
-            for (const auto &path : std::get<QJsonValue>(reply).toArray())
-                found.append(path.toString());
-            if (found.isEmpty())
-                return showStatus(tr("未找到直播姬配置，请手动选择 JSON。"));
-            bool ok = false;
-            const auto path = QInputDialog::getItem(this, tr("找到直播姬配置"), tr("配置文件"), found, 0, false, &ok);
-            if (ok)
-                previewConversion(path);
-        });
-    }
-
-    void previewConversion(const QString &path)
-    {
-        if (path.isEmpty())
-            return;
-        bool ok = false;
-        const auto name = QInputDialog::getText(this, tr("场景集合转换"), tr("集合名称"), QLineEdit::Normal,
-                                                QFileInfo(path).completeBaseName(), &ok);
-        if (!ok || name.trimmed().isEmpty())
-            return;
-        const bool filter = QMessageBox::question(this, tr("场景筛选"), tr("只保留带直播姬场景前缀的场景？"),
-                                                   QMessageBox::Yes | QMessageBox::No, QMessageBox::No) == QMessageBox::Yes;
-        helper_.call(QStringLiteral("convert"),
-                     {{QStringLiteral("path"), path}, {QStringLiteral("name"), name}, {QStringLiteral("filter"), filter}}, [this, name](auto result) {
-            if (const auto *error = std::get_if<Error>(&result))
-                return showError(*error);
-            const auto data = std::get<QJsonValue>(result).toObject();
-            QMessageBox preview(QMessageBox::Information, tr("转换预览"), data.value(QStringLiteral("summary")).toString(),
-                                QMessageBox::Save | QMessageBox::Cancel, this);
-            preview.setTextFormat(Qt::PlainText);
-            if (preview.exec() != QMessageBox::Save)
-                return;
-            const auto path = QFileDialog::getSaveFileName(this, tr("导出 OBS 场景集合"), name + QStringLiteral(".json"),
-                                                           tr("JSON (*.json)"));
-            if (path.isEmpty())
-                return;
-            QSaveFile file(path);
-            const auto content = QJsonDocument(data.value(QStringLiteral("collection")).toObject()).toJson();
-            if (!file.open(QIODevice::WriteOnly) || file.write(content) != content.size() || !file.commit())
-                return showStatus(tr("写入场景集合失败。"));
-            showStatus(tr("场景集合已导出，可在 OBS 场景集合菜单导入。"));
-        });
     }
 
     void beginFace(const FaceChallenge &face)
@@ -807,27 +647,17 @@ private:
                       [this, face, id](const Response &reply) {
             if (id != session_ || !facePending_)
                 return;
-            const auto data = bilive::Protocol::readData(reply);
-            if (const auto *error = std::get_if<Error>(&data)) {
+            auto result = bilive::Protocol::readFaceQr(face.voucher, reply);
+            if (const auto *error = std::get_if<Error>(&result)) {
                 facePending_ = false;
                 return showError(*error);
             }
-            helper_.call(QStringLiteral("face_qr"), {{QStringLiteral("voucher"), face.voucher},
-                         {QStringLiteral("content"), std::get<QJsonObject>(data).value(QStringLiteral("content"))}},
-                         [this, id](auto result) {
-                if (id != session_ || !facePending_)
-                    return;
-                if (const auto *error = std::get_if<Error>(&result)) {
-                    facePending_ = false;
-                    return showError(*error);
-                }
-                const auto data = std::get<QJsonValue>(result).toObject();
-                faceToken_ = data.value(QStringLiteral("token")).toString();
-                faceTrack_ = data.value(QStringLiteral("track")).toString();
-                showQr(QUrl(data.value(QStringLiteral("url")).toString()));
-                showStatus(tr("请用手机完成人脸验证。"));
-                faceTimer_.start();
-            });
+            auto qr = std::get<FaceQr>(std::move(result));
+            faceToken_ = std::move(qr.token);
+            faceTrack_ = std::move(qr.track);
+            showQr(qr.url);
+            showStatus(tr("请用手机完成人脸验证。"));
+            faceTimer_.start();
         });
     }
 
@@ -952,8 +782,6 @@ private:
             if (startedOutput_ && obs_frontend_streaming_active())
                 obs_frontend_streaming_stop();
             startedOutput_ = false;
-            if (pk_)
-                pk_->retire();
             room_->live = false;
             target_.reset();
             setBusy(false);
@@ -962,13 +790,8 @@ private:
     }
 
     QSettings settings_;
-    QByteArray deviceId_;
     bilive::Protocol protocol_;
     AccountStore accounts_;
-    Helper helper_;
-    QString wirePath_;
-    Automation automation_;
-    PkDialog *pk_ = nullptr;
     QTimer faceTimer_;
     qint64 faceDeadline_ = 0;
     bool facePending_ = false;
@@ -989,7 +812,7 @@ private:
     QPushButton *announcement_, *import_, *key_;
     QLineEdit *title_;
     QStringListModel *titles_;
-    QPushButton *cover_, *delay_, *pkButton_;
+    QPushButton *cover_, *delay_;
     QComboBox *area_, *preference_, *account_;
     QLabel *roomLabel_, *qr_, *status_;
     QCheckBox *autoStart_;
@@ -1046,9 +869,7 @@ bool obs_module_load()
     const QString settings = QString::fromUtf8(config);
     bfree(config);
     QDir().mkpath(QFileInfo(settings).absolutePath());
-    bilive::capture::registerOutputs();
-    bilive::registerPeerSource();
-    auto widget = std::make_unique<Dock>(std::get<bilive::Identity>(std::move(parsed)), wire, settings);
+    auto widget = std::make_unique<Dock>(std::get<bilive::Identity>(std::move(parsed)), settings);
     if (!obs_frontend_add_dock_by_id(dockId, dockId, widget.get()))
         return false;
     dock = widget.release();
@@ -1059,5 +880,4 @@ bool obs_module_load()
 void obs_module_unload()
 {
     obs_frontend_remove_event_callback(frontendEvent, nullptr);
-    bilive::capture::end();
 }

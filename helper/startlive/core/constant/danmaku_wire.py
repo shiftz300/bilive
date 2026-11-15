@@ -1,7 +1,0 @@
-from struct import Struct
-
-HEADER = Struct("!IHHII")
-
-MAX_PACKET_BYTES = 16 * 1024 * 1024
-
-HEARTBEAT_INTERVAL_SECONDS = 21

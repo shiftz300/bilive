@@ -1,1 +1,0 @@
-from .fetch_usernames import FetchUsernamesWorker
