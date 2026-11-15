@@ -2,6 +2,8 @@
 #include "bilive/protocol.hpp"
 
 #include <QCoreApplication>
+#include <QJsonArray>
+#include <QJsonDocument>
 
 using namespace bilive;
 
@@ -23,6 +25,18 @@ T value(Result<T> result)
     if (const auto *error = std::get_if<Error>(&result))
         qFatal("Unexpected simulated Bilibili error: %s", qPrintable(error->message));
     return std::get<T>(std::move(result));
+}
+
+QByteArray unmask(const QByteArray &encoded)
+{
+    const auto packet = QByteArray::fromBase64(encoded);
+    if (packet.size() < 9)
+        return {};
+    QByteArray token = packet.sliced(1, packet.size() - 9);
+    const auto salt = packet.last(8);
+    for (qsizetype i = 0; i < token.size(); ++i)
+        token[i] = char(uchar(token[i]) ^ uchar(packet[0]) ^ uchar(salt[i % 8]));
+    return token;
 }
 }
 
@@ -97,6 +111,23 @@ int main(int argc, char **argv)
     const auto face = ok(R"({"code":60043,"message":"challenge","data":{"risk_extra":{"v_voucher":"mock"}}})");
     check(std::get<FaceChallenge>(value(Protocol::readStart(face, StreamPreference::Rtmp))).voucher ==
               QStringLiteral("mock"), "face verification challenge must be returned to the UI");
+    const auto voucher = QStringLiteral("12345678abcdefgh");
+    const auto faceQr = value(Protocol::readFaceQr(voucher, ok(R"({"code":0,"data":{"content":
+        "MTcwMDAwMDAwMDAwMHxzYWx0fDE4fFZ4WGQreHN2VG9yZ1RwVGQvUzJoT0VrVmhhQWZKUWZWckI3TG51UXRxU0VCUThicERpUk96UT09"}})")));
+    const auto url = faceQr.url.toEncoded();
+    check(url.startsWith("https://www.bilibili.com/h5/risk-control/realname?t=") && url.contains("%253D"),
+          "face verification page requires a doubly escaped token");
+    const auto query = url.mid(url.indexOf("?t=") + 3);
+    const auto pageToken = QByteArray::fromPercentEncoding(QByteArray::fromPercentEncoding(query));
+    check(unmask(pageToken) == "unit-token" && unmask(faceQr.token.toLatin1()) == "unit-token",
+          "page and poll tokens must both decode to the original challenge token");
+    const auto track = QJsonDocument::fromJson(faceQr.track.toUtf8()).object();
+    const auto interaction = QJsonDocument::fromJson(track.value(QStringLiteral("dm_img_inter")).toString().toUtf8()).object();
+    check(interaction.value(QStringLiteral("wh")).toArray().size() == 3 &&
+          interaction.value(QStringLiteral("of")).toArray().size() == 3,
+          "face verification status uses the expected fingerprint fields");
+    check(std::holds_alternative<Error>(Protocol::readFaceQr(voucher, ok(R"({"code":0,"data":{"content":"!!"}})"))),
+          "bad verification packets are rejected");
     auto denied = Protocol::readStart(ok(R"({"code":-403,"message":"denied"})"), StreamPreference::Rtmp);
     check(std::get<Error>(denied).code == -403, "server denial cannot become start success");
     return 0;

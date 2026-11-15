@@ -106,6 +106,12 @@ struct FaceChallenge {
     QString message;
 };
 
+struct FaceQr {
+    QUrl url;
+    QString token;
+    QString track;
+};
+
 struct LiveStarted {
     std::optional<StreamTarget> target;
 };
@@ -141,6 +147,7 @@ public:
 
     [[nodiscard]] static Result<LoginCode> readQr(const Response &);
     [[nodiscard]] static Result<LoginPoll> readPoll(const Response &);
+    [[nodiscard]] static Result<FaceQr> readFaceQr(const QString &voucher, const Response &);
     [[nodiscard]] static Result<QJsonObject> readData(const Response &);
     [[nodiscard]] static Result<Room> readRoom(const Response &room, const Response &preLive);
     [[nodiscard]] static Result<QList<Area>> readAreas(const Response &);

@@ -3,9 +3,13 @@
 #include "bilive/protocol.hpp"
 
 #include <QCryptographicHash>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QNetworkCookie>
+#include <QRandomGenerator>
 #include <QUuid>
+
+#include <bit>
 
 namespace bilive {
 namespace {
@@ -96,6 +100,37 @@ bool httpsLink(const QUrl &url)
 {
     return url.isValid() && url.scheme() == QStringLiteral("https") &&
            !url.host().isEmpty() && url.userInfo().isEmpty();
+}
+
+// The verification page and the poll endpoint each consume a masked token.
+QByteArray maskFaceToken(const QByteArray &token)
+{
+    QByteArray mask(9, Qt::Uninitialized);
+    for (auto &byte : mask)
+        byte = char(QRandomGenerator::system()->bounded(256));
+
+    QByteArray masked = token;
+    for (qsizetype i = 0; i < masked.size(); ++i)
+        masked[i] = char(uchar(token[i]) ^ uchar(mask[0]) ^ uchar(mask[1 + i % 8]));
+    return (mask.first(1) + masked + mask.sliced(1)).toBase64();
+}
+
+QString faceTrack()
+{
+    const int widthNoise = QRandomGenerator::global()->bounded(114);
+    const int offsetNoise = QRandomGenerator::global()->bounded(514);
+    const QJsonObject interaction{
+        {QStringLiteral("ds"), QJsonArray{}},
+        {QStringLiteral("wh"), QJsonArray{1840 + 3 * widthNoise, 1580 + widthNoise, widthNoise}},
+        {QStringLiteral("of"), QJsonArray{offsetNoise, 2 * offsetNoise, offsetNoise}},
+    };
+    const QJsonObject track{
+        {QStringLiteral("dm_img_list"), QJsonArray{}},
+        {QStringLiteral("dm_img_str"), QStringLiteral("V2ViR0wgMS4wIChPcGVuR0wgRVMgMi4wIENocm9taXVtKQ")},
+        {QStringLiteral("dm_cover_img_str"), QStringLiteral("QU5HTEUgKEludGVsLCBJbnRlbChSKSBVSEQgR3JhcGhpY3MgRGlyZWN0M0QxMSB2c181XzAgcHNfNV8wLCBEM0QxMSlHb29nbGUgSW5jLiAoSW50ZW")},
+        {QStringLiteral("dm_img_inter"), QString::fromUtf8(QJsonDocument(interaction).toJson(QJsonDocument::Compact))},
+    };
+    return QString::fromUtf8(QJsonDocument(track).toJson(QJsonDocument::Compact));
 }
 } // namespace
 
@@ -404,6 +439,49 @@ Result<LoginCode> Protocol::readQr(const Response &response)
     if (qr.key.isEmpty() || !httpsLink(qr.url))
         return malformed(QStringLiteral("无法读取登录二维码"));
     return qr;
+}
+
+Result<FaceQr> Protocol::readFaceQr(const QString &voucher, const Response &response)
+{
+    const auto data = readData(response);
+    if (const auto *error = std::get_if<Error>(&data))
+        return *error;
+    const auto invalid = malformed(QStringLiteral("无法读取人脸验证二维码"));
+    const auto content = std::get<QJsonObject>(data).value(QStringLiteral("content")).toString().toLatin1();
+    const auto packet = QByteArray::fromBase64Encoding(content, QByteArray::AbortOnBase64DecodingErrors);
+    if (!packet)
+        return invalid;
+    const auto fields = packet.decoded.split('|');
+    if (fields.size() != 4 || voucher.isEmpty() || fields[0].isEmpty() || fields[1].isEmpty())
+        return invalid;
+
+    bool validIndex = false;
+    const auto mask = quint32(fields[2].toLongLong(&validIndex));
+    if (!validIndex || std::popcount(mask) < 2)
+        return invalid;
+    const int first = std::countr_zero(mask);
+    const int last = std::countr_zero(mask & (mask - 1));
+    const auto secret = (voucher.size() > 8 ? voucher.mid(8) : voucher).mid(first, last - first);
+    const auto key = QCryptographicHash::hash(secret.toUtf8() + fields[0], QCryptographicHash::Sha256).first(16);
+
+    auto encrypted = QByteArray::fromBase64Encoding(fields[3], QByteArray::AbortOnBase64DecodingErrors);
+    if (!encrypted)
+        return invalid;
+    auto &plain = encrypted.decoded;
+    for (qsizetype i = 0; i < plain.size(); ++i)
+        plain[i] = char(uchar(plain[i]) ^ uchar(key[i % key.size()]));
+    const auto challenge = QJsonDocument::fromJson(plain).object();
+    const auto type = challenge.value(QStringLiteral("type")).toString();
+    const auto token = challenge.value(QStringLiteral("token")).toString().toUtf8();
+    if (type.isEmpty() || token.isEmpty())
+        return invalid;
+    if (type != QStringLiteral("realname"))
+        return malformed(QStringLiteral("B 站要求其他验证类型"));
+
+    const auto query = QUrl::toPercentEncoding(QString::fromLatin1(maskFaceToken(token)));
+    const auto url = QUrl::fromEncoded("https://www.bilibili.com/h5/risk-control/realname?t=" +
+                                       QUrl::toPercentEncoding(QString::fromLatin1(query)));
+    return FaceQr{url, QString::fromLatin1(maskFaceToken(token)), faceTrack()};
 }
 
 Result<LoginPoll> Protocol::readPoll(const Response &response)
