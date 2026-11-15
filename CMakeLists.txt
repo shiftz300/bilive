@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.24)
 if(CMAKE_HOST_APPLE AND NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET)
     set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Minimum macOS version")
 endif()
-project(bilive VERSION 0.3.0 LANGUAGES CXX)
+project(bilive VERSION 0.3.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -28,7 +28,7 @@ endif()
 option(BILIVE_OBS_PLUGIN "Build the native Qt OBS plugin" OFF)
 if(BILIVE_OBS_PLUGIN)
     find_package(Qt6 6.6 REQUIRED COMPONENTS Widgets)
-    add_library(bilive MODULE src/plugin.cpp src/accounts.cpp src/cover.cpp
+    add_library(bilive MODULE src/plugin.cpp src/accounts.cpp src/area_picker.cpp src/cover.cpp
         third_party/qrcodegen/qrcodegen.cpp)
     if(APPLE)
         target_link_libraries(bilive PRIVATE "-framework Security")

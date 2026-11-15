@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only
 #include "bilive/network.hpp"
 #include "bilive/accounts.hpp"
+#include "bilive/area_picker.hpp"
 #include "bilive/cover.hpp"
 #include "qrcodegen.hpp"
 
@@ -15,6 +16,7 @@
 #include <QCompleter>
 #include <QStringListModel>
 #include <QDir>
+#include <QEvent>
 #include <QDialogButtonBox>
 #include <QDesktopServices>
 #include <QFileDialog>
@@ -25,6 +27,7 @@
 #include <QSignalBlocker>
 #include <QFile>
 #include <QFormLayout>
+#include <QGridLayout>
 #include <QHBoxLayout>
 #include <QImage>
 #include <QInputDialog>
@@ -34,9 +37,11 @@
 #include <QPushButton>
 #include <QPointer>
 #include <QTimer>
+#include <QToolButton>
 #include <QUuid>
 #include <QVBoxLayout>
 
+#include <algorithm>
 #include <memory>
 
 OBS_DECLARE_MODULE()
@@ -82,6 +87,41 @@ QByteArray persistentDevice(QSettings &settings)
     return id;
 }
 
+class AreaNameLabel final : public QLabel {
+public:
+    explicit AreaNameLabel(QWidget *parent) : QLabel(parent)
+    {
+        setTextFormat(Qt::PlainText);
+        setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+    }
+
+    void setName(const QString &name)
+    {
+        setToolTip(name);
+        fitText();
+    }
+
+protected:
+    void resizeEvent(QResizeEvent *event) override
+    {
+        QLabel::resizeEvent(event);
+        fitText();
+    }
+
+    void changeEvent(QEvent *event) override
+    {
+        QLabel::changeEvent(event);
+        if (event->type() == QEvent::FontChange)
+            fitText();
+    }
+
+private:
+    void fitText()
+    {
+        setText(fontMetrics().elidedText(toolTip(), Qt::ElideRight, contentsRect().width()));
+    }
+};
+
 class Dock final : public QWidget {
 public:
     Dock(Identity identity, const QString &settingsPath)
@@ -89,7 +129,10 @@ public:
           protocol_(std::move(identity), persistentDevice(settings_)), accounts_(settings_)
     {
         auto *layout = new QVBoxLayout(this);
+        layout->setContentsMargins(6, 6, 6, 6);
+        layout->setSpacing(4);
         auto *loginRow = new QHBoxLayout;
+        loginRow->setSpacing(6);
         login_ = new QPushButton(tr("扫码登录"), this);
         refresh_ = new QPushButton(tr("刷新房间"), this);
         account_ = new QComboBox(this);
@@ -102,35 +145,49 @@ public:
         qr_->hide();
         layout->addWidget(qr_);
 
-        auto *form = new QFormLayout;
+        auto *form = new QGridLayout;
+        form->setHorizontalSpacing(6);
+        form->setVerticalSpacing(4);
+        form->setColumnStretch(2, 1);
         roomLabel_ = new QLabel(tr("未登录"), this);
-        form->addRow(tr("直播间"), roomLabel_);
+        form->addWidget(new QLabel(tr("直播间"), this), 0, 0);
+        form->addWidget(roomLabel_, 0, 1, 1, 3);
+
         title_ = new QLineEdit(this);
         titles_ = new QStringListModel(this);
         auto *titleCompleter = new QCompleter(titles_, title_);
         titleCompleter->setFilterMode(Qt::MatchContains);
         title_->setCompleter(titleCompleter);
-        auto *titleRow = new QHBoxLayout;
         saveTitle_ = new QPushButton(tr("保存"), this);
-        titleRow->addWidget(title_, 1);
-        titleRow->addWidget(saveTitle_);
-        form->addRow(tr("标题"), titleRow);
-        area_ = new QComboBox(this);
-        area_->setEditable(true);
-        area_->setInsertPolicy(QComboBox::NoInsert);
-        area_->completer()->setCompletionMode(QCompleter::PopupCompletion);
-        area_->completer()->setFilterMode(Qt::MatchContains);
-        auto *areaRow = new QHBoxLayout;
-        saveArea_ = new QPushButton(tr("保存"), this);
-        areaRow->addWidget(area_, 1);
-        areaRow->addWidget(saveArea_);
-        form->addRow(tr("分区"), areaRow);
+        auto *titleLabel = new QLabel(tr("标题"), this);
+        titleLabel->setBuddy(title_);
+        form->addWidget(titleLabel, 1, 0);
+        form->addWidget(title_, 1, 1, 1, 2);
+        form->addWidget(saveTitle_, 1, 3);
+
+        areaParent_ = new QLabel(this);
+        areaParent_->setTextFormat(Qt::PlainText);
+        areaChild_ = new AreaNameLabel(this);
+        areaParent_->setAccessibleName(tr("大类"));
+        areaChild_->setAccessibleName(tr("子分区"));
+        modifyArea_ = new QPushButton(tr("修改"), this);
+        modifyArea_->setAccessibleName(tr("修改直播分区"));
+        form->addWidget(new QLabel(tr("分区"), this), 2, 0);
+        form->addWidget(areaParent_, 2, 1);
+        form->addWidget(areaChild_, 2, 2);
+        form->addWidget(modifyArea_, 2, 3);
+        showArea();
+
         preference_ = new QComboBox(this);
         preference_->addItems({tr("RTMP"), tr("优先 SRT"), tr("仅 SRT")});
-        form->addRow(tr("协议"), preference_);
+        auto *preferenceLabel = new QLabel(tr("协议"), this);
+        preferenceLabel->setBuddy(preference_);
+        form->addWidget(preferenceLabel, 3, 0);
+        form->addWidget(preference_, 3, 1, 1, 2);
         layout->addLayout(form);
 
         auto *liveRow = new QHBoxLayout;
+        liveRow->setSpacing(6);
         start_ = new QPushButton(tr("开播"), this);
         stop_ = new QPushButton(tr("关播"), this);
         liveRow->addWidget(start_);
@@ -138,6 +195,7 @@ public:
         layout->addLayout(liveRow);
 
         auto *actions = new QHBoxLayout;
+        actions->setSpacing(6);
         announcement_ = new QPushButton(tr("公告"), this);
         import_ = new QPushButton(tr("导入 OBS"), this);
         key_ = new QPushButton(tr("复制串流密钥"), this);
@@ -146,10 +204,14 @@ public:
         actions->addWidget(key_);
         layout->addLayout(actions);
         auto *features = new QHBoxLayout;
+        features->setSpacing(6);
         auto addFeature = [this, features](const QString &text, auto slot) {
-            auto *button = new QPushButton(text, this);
+            auto *button = new QToolButton(this);
+            button->setText(text);
+            button->setToolButtonStyle(Qt::ToolButtonTextOnly);
+            button->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
             features->addWidget(button);
-            connect(button, &QPushButton::clicked, this, slot);
+            connect(button, &QToolButton::clicked, this, slot);
             return button;
         };
         cover_ = addFeature(tr("封面"), [this] { editCover(); });
@@ -172,7 +234,7 @@ public:
         connect(login_, &QPushButton::clicked, this, [this] { loginClick(); });
         connect(refresh_, &QPushButton::clicked, this, [this] { refreshRoom(); });
         connect(saveTitle_, &QPushButton::clicked, this, [this] { saveTitle(); });
-        connect(saveArea_, &QPushButton::clicked, this, [this] { saveArea(); });
+        connect(modifyArea_, &QPushButton::clicked, this, [this] { editArea(); });
         connect(start_, &QPushButton::clicked, this, [this] { startRoom(); });
         connect(stop_, &QPushButton::clicked, this, [this] { stopRoom(); });
         connect(announcement_, &QPushButton::clicked, this, [this] { saveAnnouncement(); });
@@ -263,8 +325,9 @@ private:
         login_->setEnabled(!busy_);
         refresh_->setEnabled(signedIn && !busy_);
         account_->setEnabled(!busy_);
-        for (auto *item : QList<QWidget *>{title_, area_, saveTitle_, saveArea_, start_, announcement_, cover_, delay_})
+        for (auto *item : QList<QWidget *>{title_, saveTitle_, start_, announcement_, cover_, delay_})
             item->setEnabled(loaded && !busy_);
+        modifyArea_->setEnabled(loaded && !busy_ && !areas_.isEmpty());
         start_->setText(loaded && room_->live ? tr("重新获取推流地址") : tr("开播"));
         stop_->setEnabled(loaded && room_->live && !busy_);
         import_->setEnabled(target_.has_value() && !busy_);
@@ -316,7 +379,8 @@ private:
         target_.reset();
         qrKey_.clear();
         title_->clear();
-        area_->clear();
+        areas_.clear();
+        showArea();
         settings_.remove(QStringLiteral("accounts/current"));
         refreshAccounts();
         updateControls();
@@ -437,19 +501,18 @@ private:
                 if (!room_->live)
                     target_.reset();
                 title_->setText(room_->title);
-                area_->clear();
-                if (!room_->areaId.isEmpty())
-                    area_->addItem(room_->areaName, room_->areaId);
+                areas_.clear();
+                showArea();
 
                 network_.send(protocol_.areas(credentials_, now()), this, [this](const Response &response) {
-                    setBusy(false);
-                    const auto result = bilive::Protocol::readAreas(response);
-                    if (const auto *error = std::get_if<Error>(&result))
+                    auto result = bilive::Protocol::readAreas(response);
+                    if (const auto *error = std::get_if<Error>(&result)) {
+                        setBusy(false);
                         return showError(*error);
-                    area_->clear();
-                    for (const auto &area : std::get<QList<Area>>(result))
-                        area_->addItem(tr("%1 / %2").arg(area.parent, area.name), area.id);
-                    area_->setCurrentIndex(area_->findData(room_->areaId));
+                    }
+                    areas_ = std::get<QList<Area>>(std::move(result));
+                    showArea();
+                    setBusy(false);
                     showStatus(std::exchange(storeWarning_, false)
                                    ? tr("房间设置已读取。系统凭据库不可用，此账号只保留到退出 OBS。")
                                    : tr("房间设置已读取。"));
@@ -482,20 +545,39 @@ private:
         });
     }
 
-    void saveArea()
+    void showArea()
     {
-        const auto areaId = area_->currentText() == area_->itemText(area_->currentIndex())
-                                ? area_->currentData().toString() : QString{};
-        if (!room_ || areaId.isEmpty())
-            return showStatus(tr("请选择直播分区。"));
+        QString parent = room_ ? room_->parentAreaName : QString{};
+        QString child = room_ ? room_->areaName : QString{};
+        if (room_) {
+            const auto area = std::ranges::find(areas_, room_->areaId, &Area::id);
+            if (area != areas_.end()) {
+                parent = area->parent;
+                child = area->name;
+            }
+        }
+        areaParent_->setText(parent.isEmpty() ? QStringLiteral("—") : parent);
+        areaChild_->setName(child.isEmpty() ? QStringLiteral("—") : child);
+    }
+
+    void editArea()
+    {
+        if (!room_ || areas_.isEmpty())
+            return;
+        const auto chosen = chooseArea(this, areas_, room_->areaId);
+        if (!room_ || !chosen || chosen->id == room_->areaId)
+            return;
         setBusy(true);
-        network_.send(protocol_.updateArea(credentials_, room_->id, areaId, now()), this,
-                      [this, areaId](const Response &response) {
+        network_.send(protocol_.updateArea(credentials_, room_->id, chosen->id, now()), this,
+                      [this, area = *chosen](const Response &response) {
             setBusy(false);
             const auto result = bilive::Protocol::readData(response);
             if (const auto *error = std::get_if<Error>(&result))
                 return showError(*error);
-            room_->areaId = areaId;
+            room_->areaId = area.id;
+            room_->areaName = area.name;
+            room_->parentAreaName = area.parent;
+            showArea();
             showStatus(tr("分区已保存。"));
         });
     }
@@ -630,7 +712,7 @@ private:
         faceToken_.clear();
         faceTrack_.clear();
         const auto id = session_;
-        network_.send(protocol_.faceReport(credentials_, room_->id, area_->currentData().toString(),
+        network_.send(protocol_.faceReport(credentials_, room_->id, room_->areaId,
                                           face.code, face.message, now()), this, [](const Response &) {});
         if (!face.qr.isEmpty()) {
             showQr(face.qr);
@@ -702,9 +784,7 @@ private:
     {
         if (facePending_)
             return showStatus(tr("请先完成手机上的人脸验证。"));
-        const QString areaId = area_->currentText() == area_->itemText(area_->currentIndex())
-                                   ? area_->currentData().toString() : QString{};
-        if (!room_ || areaId.isEmpty())
+        if (!room_ || room_->areaId.isEmpty())
             return showStatus(tr("请选择直播分区。"));
         if (obs_frontend_streaming_active())
             return showStatus(tr("OBS 正在推流，请先结束当前输出。"));
@@ -713,7 +793,7 @@ private:
         qr_->hide();
         setBusy(true);
         showStatus(tr("正在向 B 站申请开播…"));
-        network_.send(protocol_.start(credentials_, room_->id, areaId, now()), this,
+        network_.send(protocol_.start(credentials_, room_->id, room_->areaId, now()), this,
                       [this, autoStart, preference](const Response &response) {
             const auto result = bilive::Protocol::readStart(response, preference);
             if (const auto *error = std::get_if<Error>(&result)) {
@@ -803,18 +883,20 @@ private:
     Credentials credentials_;
     QString qrKey_;
     std::optional<Room> room_;
+    QList<Area> areas_;
     std::optional<StreamTarget> target_;
     quint64 session_ = 0;
     bool busy_ = false;
     bool loginPending_ = false;
     bool startedOutput_ = false;
-    QPushButton *login_, *refresh_, *saveTitle_, *saveArea_, *start_, *stop_;
+    QPushButton *login_, *refresh_, *saveTitle_, *modifyArea_, *start_, *stop_;
     QPushButton *announcement_, *import_, *key_;
     QLineEdit *title_;
     QStringListModel *titles_;
-    QPushButton *cover_, *delay_;
-    QComboBox *area_, *preference_, *account_;
-    QLabel *roomLabel_, *qr_, *status_;
+    QToolButton *cover_, *delay_;
+    QComboBox *preference_, *account_;
+    QLabel *roomLabel_, *areaParent_, *qr_, *status_;
+    AreaNameLabel *areaChild_;
     QCheckBox *autoStart_;
 };
 

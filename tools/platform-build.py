@@ -14,7 +14,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 OBS = "33.0.1"
 QT = "2026-10-23"
-OUT = "0.3.0"
+OUT = "0.3.1"
 OBS_URL = f"https://github.com/obsproject/obs-studio/releases/download/{OBS}/"
 QT_URL = f"https://github.com/obsproject/obs-deps/releases/download/{QT}/"
 
