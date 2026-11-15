@@ -1,13 +1,16 @@
 # SPDX-License-Identifier: GPL-3.0-only
 cmake_minimum_required(VERSION 3.24)
 if(CMAKE_HOST_APPLE AND NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET)
-    set(CMAKE_OSX_DEPLOYMENT_TARGET "13.0" CACHE STRING "Minimum macOS version")
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Minimum macOS version")
 endif()
-project(bilive VERSION 0.1.0 LANGUAGES CXX)
+project(bilive VERSION 0.2.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+if(MSVC)
+    add_compile_options(/utf-8 /Zc:__cplusplus)
+endif()
 
 find_package(Qt6 6.6 REQUIRED COMPONENTS Core Network)
 add_library(bilive-core STATIC src/protocol.cpp src/network.cpp)
@@ -43,15 +46,20 @@ if(BILIVE_OBS_PLUGIN)
     target_include_directories(bilive PRIVATE third_party/qrcodegen)
     target_link_libraries(bilive PRIVATE bilive-core Qt6::Widgets)
     set_target_properties(bilive PROPERTIES PREFIX "")
-    if(MSVC)
-        target_compile_options(bilive PRIVATE /utf-8)
-        target_compile_options(bilive-core PRIVATE /utf-8)
-        if(TARGET bilive-protocol-test)
-            target_compile_options(bilive-protocol-test PRIVATE /utf-8)
-        endif()
-    endif()
 
-    if(APPLE AND BILIVE_OBS_SOURCE)
+    if(BILIVE_OBS_SOURCE AND NOT APPLE)
+        set(BILIVE_OBS_LIB "" CACHE FILEPATH "libobs shared link library")
+        set(BILIVE_FRONTEND_LIB "" CACHE FILEPATH "OBS frontend shared link library")
+        set(BILIVE_SIMDE_INCLUDE "" CACHE PATH "Directory containing simde/")
+        if(NOT EXISTS "${BILIVE_OBS_LIB}" OR NOT EXISTS "${BILIVE_FRONTEND_LIB}")
+            message(FATAL_ERROR "BILIVE_OBS_LIB and BILIVE_FRONTEND_LIB must point to the libraries for the selected OBS build")
+        endif()
+        file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/obsconfig.h"
+                   "#pragma once\n#define OBS_RELEASE_CANDIDATE 0\n#define OBS_BETA 0\n")
+        target_include_directories(bilive PRIVATE "${CMAKE_CURRENT_BINARY_DIR}"
+            "${BILIVE_OBS_SOURCE}/libobs" "${BILIVE_OBS_SOURCE}/frontend/api" "${BILIVE_SIMDE_INCLUDE}")
+        target_link_libraries(bilive PRIVATE "${BILIVE_OBS_LIB}" "${BILIVE_FRONTEND_LIB}")
+    elseif(APPLE AND BILIVE_OBS_SOURCE)
         # The packaged OBS app includes libraries, while its exact tagged source
         # and SIMDe supply the headers for local development.
         set(BILIVE_OBS_APP "/Applications/OBS.app" CACHE PATH "Installed OBS app")
@@ -82,14 +90,38 @@ if(BILIVE_OBS_PLUGIN)
             MACOSX_BUNDLE_INFO_PLIST "${CMAKE_CURRENT_SOURCE_DIR}/cmake/Info.plist.in"
             BUILD_WITH_INSTALL_RPATH TRUE
             INSTALL_RPATH "@executable_path/../Frameworks")
-        install(TARGETS bilive BUNDLE DESTINATION .)
-    elseif(WIN32)
-        install(TARGETS bilive RUNTIME DESTINATION obs-plugins/64bit
-                               LIBRARY DESTINATION obs-plugins/64bit)
-        install(FILES resources/livehime.json DESTINATION data/obs-plugins/bilive)
+        set(data_dest bilive.plugin/Contents/Resources)
+        install(TARGETS bilive BUNDLE DESTINATION . LIBRARY DESTINATION .)
     else()
-        include(GNUInstallDirs)
-        install(TARGETS bilive LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}/obs-plugins")
-        install(FILES resources/livehime.json DESTINATION "${CMAKE_INSTALL_DATADIR}/obs/obs-plugins/bilive")
+        # Both modern Windows and Linux OBS loaders take a per-plugin
+        # directory containing the module at its root and a data/ sibling.
+        set(data_dest bilive/data)
+        install(TARGETS bilive RUNTIME DESTINATION bilive LIBRARY DESTINATION bilive)
+    endif()
+
+    install(FILES resources/livehime.json LICENSE DESTINATION "${data_dest}")
+    install(DIRECTORY helper/ DESTINATION "${data_dest}/helper"
+        PATTERN "__pycache__" EXCLUDE PATTERN "*.pyc" EXCLUDE)
+    set(BILIVE_HELPER_RUNTIME "" CACHE PATH "Bundled CPython 3.13 runtime")
+    set(BILIVE_HELPER_SITE "" CACHE PATH "Installed platform helper dependencies")
+    if(BILIVE_HELPER_RUNTIME AND BILIVE_HELPER_SITE)
+        if(BUILD_TESTING)
+            if(WIN32)
+                set(helper_python "${BILIVE_HELPER_RUNTIME}/python.exe")
+            else()
+                set(helper_python "${BILIVE_HELPER_RUNTIME}/bin/python3.13")
+            endif()
+            add_test(NAME bilive-helper COMMAND "${helper_python}" -B
+                "${CMAKE_CURRENT_SOURCE_DIR}/tests/helper_test.py"
+                "${CMAKE_CURRENT_SOURCE_DIR}/helper/bilive_helper.py"
+                "${CMAKE_CURRENT_SOURCE_DIR}/resources/livehime.json")
+            set_tests_properties(bilive-helper PROPERTIES
+                ENVIRONMENT "PYTHONPATH=${BILIVE_HELPER_SITE}"
+                TIMEOUT 50)
+        endif()
+        install(DIRECTORY "${BILIVE_HELPER_RUNTIME}/" DESTINATION "${data_dest}/helper/runtime"
+            USE_SOURCE_PERMISSIONS PATTERN "__pycache__" EXCLUDE)
+        install(DIRECTORY "${BILIVE_HELPER_SITE}/" DESTINATION "${data_dest}/helper/site"
+            USE_SOURCE_PERMISSIONS PATTERN "__pycache__" EXCLUDE)
     endif()
 endif()

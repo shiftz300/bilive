@@ -1,24 +1,39 @@
 # bilive
 
-bilive 是一个在 OBS Studio 中管理哔哩哔哩直播的原生 Qt C++ 停靠窗口。界面使用 OBS 自带的 Qt。推流配置和启停通过 OBS 前端 API 调用。
+bilive 把 B 站开播和 StartLive 的工作流程放到 OBS 停靠窗口中。界面由 OBS 自带的 Qt C++ 绘制。推流设置、开始和停止输出通过 OBS 前端 API 操作。封装的后台进程提供 StartLive 的 PK 会话管理、RTC、人脸验证编解码和场景转换。
 
-当前目标是移植 StartLive 1.4.0 的功能。这个版本完成了核心流程，测试使用模拟响应。
+打开入口为「停靠窗口 → bilive · B 站开播」。
 
-| 功能 | 当前状态 |
+| 功能 | 0.2.0 的入口 |
 | --- | --- |
-| 扫码登录 | 生成二维码、轮询、取消、过期处理和会话登录 |
-| 直播间 | 读房间状态和开播设置，修改标题、分区、公告 |
-| 开关播 | B 站接口、RTMP/RTMPS 和 SRT 选择、可选自动推流、复制密钥 |
-| 人脸验证 | 识别两种响应。服务端返回二维码时可在手机上验证后重试 |
-| 后续移植 | 持久化多账号、新版人脸验证交互、封面上传和裁剪、直播延迟、PK 及音视频连线、配置转换、局域网自动化与其他设置 |
+| 扫码与账号 | 扫码、保存到系统凭据库、切换账号及退出当前账号 |
+| 直播间 | 房间状态、标题历史、分区搜索、标题与公告、封面裁剪上传、B 站推流延迟 |
+| 开关播 | RTMP / RTMPS / SRT、自动导入 OBS、可选自动推流、人脸验证二维码与状态轮询 |
+| PK / 连线 | 经典 PK、视频 PK、视频连线、搜索主播、邀请、连战、静音、编码检测与裁剪设置 |
+| 场景转换 | 发现直播姬场景、预览转换结果和不兼容项、导出 OBS 场景集合 |
+| 设置 | 代理、推流偏好、停靠窗口字体、状态记录以及 HTTP 自动化 |
 
-账号会话保存在内存里。重新启动 OBS 后需要重新扫码。启动推流的复选框默认关闭。导入时使用当前 OBS 配置，既有推流期间禁用导入。
+PK 前先开始 OBS 推流。窗口可显示本地和对端预览。需要把对端音视频交给 OBS 时可选「添加对端源」，再用 OBS 调整场景、混音与监听。完整的 B 站连线、硬件编码器以及混音回路仍需登录后的实测。
 
-## 本地构建
+账号凭据进入 macOS 钥匙串或 Windows 凭据管理器。Linux 使用桌面的 Secret Service，通常由 `libsecret-tools` 提供 `secret-tool`。凭据服务不可用时账号保留到本次退出。自动推流和 HTTP 监听首次都关闭。独立版的托盘、背景和更新界面由 OBS 的界面与插件安装流程承接。
 
-原生插件的目标平台是 macOS、Windows 和 Linux。当前仅用 Apple Silicon 和 OBS Studio 33.0.1 的 Qt 6.11.1 SDK 完成编译。构建插件时应使用与目标 OBS 匹配的 OBS 和 Qt SDK。Windows 和 Linux 的安装布局已在 CMake 中定义，尚待实机构建和加载验证。
+可选 HTTP 自动化保留 `POST /api/startLive` 和 `POST /api/stopLive`。启用后从设置复制令牌，请求带上 `Authorization: Bearer <令牌>`。默认只接受本机连接。返回 `202` 表示插件已接收操作，实际结果在停靠窗口显示。绑定到局域网地址时，HTTP 内容由网络传输。
 
-协议核心和模拟测试只依赖 Qt Core、Qt Network、CMake 和 C++20。
+## 安装和验证范围
+
+使用与目标 OBS 版本匹配的插件包。退出 OBS 后安装，重新启动再打开停靠窗口。
+
+| 平台 | OBS 33 安装位置 |
+| --- | --- |
+| macOS | 将 `bilive.plugin` 放到 `~/Library/Application Support/obs-studio/plugins/` |
+| Windows | 将压缩包内的 `bilive` 文件夹放到 `%ProgramData%\obs-studio\plugins\` |
+| Linux | 将压缩包内的 `bilive` 文件夹放到 `${XDG_DATA_HOME:-$HOME/.local/share}/obs-studio/plugins/` |
+
+本次生成的包适用于 Apple Silicon、macOS 14+、OBS 33.0.1 使用的 Qt 6.11.1。已通过编译、签名检查和离线模拟测试。Windows x64 和 Linux x64 有对应的 SDK 与打包流程，尚无运行结果。实际扫码开播、PK 连线及 UI 运行也尚未实测。
+
+## 构建
+
+需要 CMake、Ninja、C++20 和匹配目标 OBS 的 Qt SDK。只运行协议测试时使用普通 Qt SDK。
 
 ```sh
 cmake -S . -B build -DCMAKE_PREFIX_PATH=/path/to/qt
@@ -26,19 +41,12 @@ cmake --build build
 ctest --test-dir build --output-on-failure
 ```
 
-有 OBS CMake SDK 的环境可加 `-DBILIVE_OBS_PLUGIN=ON`，并让 CMake 查到 `libobs` 和 `obs-frontend-api`。测试过的 macOS 本地构建组合也可直接使用已安装的 OBS 和同版本仓库头文件。
+OBS 33.0.1 的打包入口在三平台共用。Windows 在 Visual Studio x64 Developer PowerShell 运行。Ubuntu 26.04 安装 `qt6-base-dev`、`qt6-base-dev-tools`、`ninja-build` 和 `libobs-dev`。macOS 可用 `--obs-app /Applications/OBS.app` 指定已安装的同版本 OBS。脚本会下载相应 SDK 和后台运行时。
 
 ```sh
-cmake -S . -B build -G Ninja \
-  -DCMAKE_PREFIX_PATH=/path/to/obs-qt-sdk \
-  -DBILIVE_OBS_PLUGIN=ON \
-  -DBILIVE_OBS_SOURCE=/path/to/obs-studio-33.0.1 \
-  -DBILIVE_SIMDE_INCLUDE=/path/to/simde-0.8.2
-cmake --build build
+python3 tools/platform-build.py .sdk
 ```
 
-将构建的 `bilive.plugin` 放进 `~/Library/Application Support/obs-studio/plugins/`，重启 OBS 后从「停靠窗口 → bilive · B 站开播」打开。预览包使用本地临时签名，适用于同一个 Qt ABI 的 OBS。实际登录、开播和应用内加载仍待验证。
+已有 OBS 和 Qt CMake SDK 的环境可以用 `-DBILIVE_OBS_PLUGIN=ON` 手动配置。用 `tools/helper-runtime.py` 准备 Python 3.13 与依赖，将输出的 `BILIVE_HELPER_RUNTIME` 和 `BILIVE_HELPER_SITE` 传给 CMake，然后 `cmake --install` 打包。如采用源码头文件方式构建，参照 `tools/platform-build.py` 中对应平台的参数。
 
-协议字段和签名实现参考 StartLive 1.4.0。随附的 `resources/livehime.json` 是同一上游标签中的接口配置。它可能随 B 站接口变化而需要更新。第三方 QR 编码由 Project Nayuki 的 MIT 授权 C++ 实现提供。
-
-[StartLive 1.4.0](https://github.com/Radekyspec/StartLive/tree/1.4.0) · [OBS 前端 API](https://docs.obsproject.com/reference-frontend-api) · [QR Code generator 1.8.0](https://github.com/nayuki/QR-Code-generator/tree/v1.8.0)
+[StartLive 1.4.0](https://github.com/Radekyspec/StartLive/tree/1.4.0) · [OBS 前端 API](https://docs.obsproject.com/reference-frontend-api) · [OBS 33.0.1 发布](https://github.com/obsproject/obs-studio/releases/tag/33.0.1)
