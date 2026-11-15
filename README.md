@@ -4,7 +4,7 @@ bilive 是原生 OBS 插件，把 B 站扫码登录、直播间管理和开关�
 
 ## 安装
 
-使用与 OBS 版本匹配的插件包。退出 OBS 后解压并安装。
+从 [GitHub Releases](https://github.com/shiftz300/bilive/releases) 下载与 OBS 版本匹配的插件包。退出 OBS 后解压并安装。
 
 | 平台 | 安装位置 |
 | --- | --- |
@@ -12,7 +12,7 @@ bilive 是原生 OBS 插件，把 B 站扫码登录、直播间管理和开关�
 | Windows | 将 `bilive` 文件夹放入 `%ProgramData%\obs-studio\plugins\` |
 | Linux | 将 `bilive` 文件夹放入 `${XDG_DATA_HOME:-$HOME/.local/share}/obs-studio/plugins/` |
 
-启动 OBS，打开「停靠窗口 → bilive · B 站开播」，扫码登录后即可管理房间并将推流设置导入 OBS。使用 PK 或视频连线前，先开始 OBS 推流。Linux 保存账号需要桌面 Secret Service 和 `secret-tool`。
+启动 OBS，打开「停靠窗口 → bilive」，扫码登录后即可管理房间并将推流设置导入 OBS。使用 PK 或视频连线前，先开始 OBS 推流。Linux 保存账号需要桌面 Secret Service 和 `secret-tool`。
 
 ## 构建
 

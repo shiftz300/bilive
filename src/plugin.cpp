@@ -50,7 +50,6 @@ OBS_DECLARE_MODULE()
 namespace {
 using namespace bilive;
 constexpr const char *dockId = "bilive";
-constexpr const char *dockTitle = "bilive · B 站开播";
 
 qint64 now()
 {
@@ -1035,6 +1034,12 @@ bool obs_module_load()
     if (std::holds_alternative<bilive::Error>(parsed))
         return false;
 
+#ifdef BILIVE_QT_TLS_PATH
+    const auto pluginPath = QFileInfo(wire).absoluteDir().absoluteFilePath(
+        QStringLiteral(BILIVE_QT_TLS_PATH));
+    QCoreApplication::addLibraryPath(QDir::cleanPath(pluginPath));
+#endif
+
     char *config = obs_module_config_path("bilive.ini");
     if (!config)
         return false;
@@ -1044,7 +1049,7 @@ bool obs_module_load()
     bilive::capture::registerOutputs();
     bilive::registerPeerSource();
     auto widget = std::make_unique<Dock>(std::get<bilive::Identity>(std::move(parsed)), wire, settings);
-    if (!obs_frontend_add_dock_by_id(dockId, dockTitle, widget.get()))
+    if (!obs_frontend_add_dock_by_id(dockId, dockId, widget.get()))
         return false;
     dock = widget.release();
     obs_frontend_add_event_callback(frontendEvent, nullptr);

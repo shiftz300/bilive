@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.24)
 if(CMAKE_HOST_APPLE AND NOT DEFINED CMAKE_OSX_DEPLOYMENT_TARGET)
     set(CMAKE_OSX_DEPLOYMENT_TARGET "14.0" CACHE STRING "Minimum macOS version")
 endif()
-project(bilive VERSION 0.2.0 LANGUAGES CXX)
+project(bilive VERSION 0.2.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -97,6 +97,23 @@ if(BILIVE_OBS_PLUGIN)
         # directory containing the module at its root and a data/ sibling.
         set(data_dest bilive/data)
         install(TARGETS bilive RUNTIME DESTINATION bilive LIBRARY DESTINATION bilive)
+    endif()
+
+    # OBS links Qt Network, but its own network clients can use libcurl. The
+    # Qt plugin directory in a standalone OBS package may have no TLS backend.
+    if(APPLE)
+        set(qt_tls_target Qt6::QSecureTransportBackendPlugin)
+        set(qt_tls_path "../PlugIns/qt")
+        set(qt_tls_dest bilive.plugin/Contents/PlugIns/qt)
+    elseif(WIN32)
+        set(qt_tls_target Qt6::QSchannelBackendPlugin)
+        set(qt_tls_path qt)
+        set(qt_tls_dest "${data_dest}/qt")
+    endif()
+    if(qt_tls_target)
+        target_compile_definitions(bilive PRIVATE BILIVE_QT_TLS_PATH="${qt_tls_path}")
+        install(PROGRAMS "$<TARGET_FILE:${qt_tls_target}>" DESTINATION "${qt_tls_dest}/tls")
+        install(FILES resources/qt-tls-notice.txt DESTINATION "${data_dest}")
     endif()
 
     install(FILES resources/livehime.json LICENSE DESTINATION "${data_dest}")

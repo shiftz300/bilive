@@ -14,7 +14,7 @@ import zipfile
 ROOT = Path(__file__).resolve().parents[1]
 OBS = "33.0.1"
 QT = "2026-10-23"
-OUT = "0.2.0"
+OUT = "0.2.1"
 OBS_URL = f"https://github.com/obsproject/obs-studio/releases/download/{OBS}/"
 QT_URL = f"https://github.com/obsproject/obs-deps/releases/download/{QT}/"
 
@@ -144,7 +144,10 @@ def build(work, obs_app):
     dist.mkdir(exist_ok=True)
     base = dist / f"bilive-{OUT}-{platform_id}"
     if platform.system() == "Darwin":
+        run("codesign", "--force", "--sign", "-",
+            str(staged / "bilive.plugin/Contents/PlugIns/qt/tls/libqsecuretransportbackend.dylib"))
         run("codesign", "--force", "--sign", "-", str(staged / "bilive.plugin"))
+        run("codesign", "--verify", "--strict", "--deep", str(staged / "bilive.plugin"))
         zip_path = str(base) + ".zip"
         Path(zip_path).unlink(missing_ok=True)
         run("ditto", "-ck", "--keepParent", str(staged / "bilive.plugin"), zip_path)

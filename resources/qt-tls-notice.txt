@@ -1,0 +1,8 @@
+The Qt TLS backend is part of Qt Base, copyright The Qt Company Ltd.
+It is distributed here under GPL-3.0-only. See the accompanying LICENSE
+in the bilive plugin resources.
+
+Corresponding Qt Base source (including Secure Transport and Schannel):
+https://github.com/qt/qtbase/tree/v6.11.1
+OBS Project build scripts and SDK:
+https://github.com/obsproject/obs-deps/tree/2026-10-23

@@ -4,6 +4,7 @@
 #include <QNetworkReply>
 #include <QNetworkProxyFactory>
 #include <QNetworkRequest>
+#include <QSslSocket>
 
 namespace bilive {
 namespace {
@@ -58,8 +59,12 @@ void Network::send(const Request &request, QObject *context, Completion completi
                      [reply, completion = std::move(completion)]() {
         Response response;
         response.status = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-        if (reply->error() != QNetworkReply::NoError)
+        if (reply->error() != QNetworkReply::NoError && response.status == 0 &&
+            reply->url().scheme() == QStringLiteral("https") && !QSslSocket::supportsSsl()) {
+            response.networkError = tr("无法建立 HTTPS 连接：当前 OBS 缺少可用的 Qt TLS 后端。");
+        } else if (reply->error() != QNetworkReply::NoError) {
             response.networkError = tr("网络请求失败（%1）").arg(int(reply->error()));
+        }
         response.body = reply->readAll();
         for (const auto &header : reply->rawHeaderPairs()) {
             if (header.first.compare("Set-Cookie", Qt::CaseInsensitive) == 0)

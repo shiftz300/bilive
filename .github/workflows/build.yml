@@ -29,5 +29,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: bilive-${{ matrix.os }}
-          path: dist/bilive-0.2.0-*
+          path: dist/bilive-*
           if-no-files-found: error
